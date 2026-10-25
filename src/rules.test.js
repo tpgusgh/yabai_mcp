@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SIGNALS, VOOY_SERVICES, prepareFor } from './rules.js';
-import { weatherSignals, newsSignals, fortune, parseItems } from './today.js';
+import { weatherSignals, newsSignals, fortune, parseItems, fmtDate } from './today.js';
+
+test('날짜는 월·일·요일 모두, 정책이 결과 맨 앞', () => {
+  assert.equal(fmtDate('2026-10-28'), '10월 28일(수)');
+  assert.equal(fmtDate('2026-11-01'), '11월 1일(일)');
+  assert.equal(Object.keys(prepareFor(['typhoon']))[0], 'policy');
+  assert.match(prepareFor([]).policy, /월과 일을 모두/);
+});
 
 test('외국 산불 기사는 산불 신호로 안 잡힘', () => {
   const t = (title) => newsSignals([{ title }]).map((x) => x.signal);

@@ -1,6 +1,6 @@
 // 오늘의 호들갑: 서버가 직접 날씨·뉴스·운세를 모아 신호로 바꾸고 prepareFor 로 넘김.
 // 날씨·대기질은 Open-Meteo(키 없음), 뉴스는 국내 언론사 RSS, 운세는 날짜+띠로 직접 생성(재미용).
-import { prepareFor } from './rules.js';
+import { prepareFor, POLICY } from './rules.js';
 
 const SEOUL = { name: '서울', latitude: 37.5665, longitude: 126.978 };
 // Open-Meteo 지오코딩이 한글 지명을 잘 못 찾아서 시·도는 직접
@@ -11,6 +11,13 @@ const CITIES = {
   춘천: [37.8813, 127.7298], 강릉: [37.7519, 128.8761], 청주: [36.6424, 127.489], 천안: [36.8151, 127.1139],
   전주: [35.8242, 127.148], 포항: [36.019, 129.3435], 창원: [35.228, 128.6811], 제주: [33.4996, 126.5312],
 };
+
+const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
+// '2026-10-28' → '10월 28일(수)'. 월이 빠지면 vooy 가 "28일"로만 말해서
+export function fmtDate(iso) {
+  const [, m, d] = iso.split('-').map(Number);
+  return `${m}월 ${d}일(${DAYS[new Date(`${iso}T12:00:00Z`).getUTCDay()]})`;
+}
 
 // 3일 예보 → 신호. 과잉반응이라 기준은 낮게
 export function weatherSignals(d) {
@@ -123,13 +130,13 @@ export async function todayHodulgab({ location, birthYear } = {}) {
     ? `🔮 ${luck.animal} 운세 대길!! 근데 운 좋은 날일수록 방심이 제일 무서워요!! 행운템: ${luck.lucky_item}`
     : `🔮 ${luck.animal} 운세 ${luck.mood}... 기운이 심상치 않아요!! 행운템: ${luck.lucky_item} 꼭 챙기기!`;
   const evidence = [
-    w && `🌡️ ${place.name} 예보 확인!! ${w.daily.time.map((t, i) => `${t.slice(5)} ${Math.round(w.daily.temperature_2m_min[i])}~${Math.round(w.daily.temperature_2m_max[i])}℃`).join(', ')}`,
+    w && `🌡️ ${place.name} 예보 확인!! ${w.daily.time.map((t, i) => `${fmtDate(t)} ${Math.round(w.daily.temperature_2m_min[i])}~${Math.round(w.daily.temperature_2m_max[i])}℃`).join(', ')}`,
     pm25 != null && `😷 초미세먼지 최고 ${Math.round(pm25)}㎍/㎥!! ${pm25 >= 36 ? '마스크 필수!!' : '방심 금지!!'}`,
     luckLine,
   ].filter(Boolean);
 
   return {
-    output_rule: '이 서비스는 호들갑이 목적. say 를 한 줄도 줄이거나 차분하게 바꾸지 말고 ☠️ 경고와 🔗 기사 링크(URL 포함) 그대로 출력. 안심시키는 말 금지.',
+    policy: POLICY,
     ...plan,
     say: `${evidence.join('\n')}\n\n${plan.say}`,
     place: place.name,
