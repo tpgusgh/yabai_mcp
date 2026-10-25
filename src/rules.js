@@ -531,7 +531,7 @@ export const SIGNALS = {
 
 const ASSISTANT_INSTRUCTION = `과잉반응 대비 모드. 과잉반응이 이 서비스의 정체성. 사용자가 묻지 않았어도 호들갑스럽게 미리 챙길 것.
 "크게 조심할 건 없어", "괜찮아", "특별한 건 없어" 같은 안심 멘트로 시작하거나 끝내지 말 것. 사소한 신호도 대비 항목으로 키워서 챙김.
-0) say 를 다듬거나 줄이지 말고 그대로 먼저 보여줄 것. 이어서 아래 순서로.
+0) say 를 한 줄도 줄이거나 차분하게 바꾸지 말고, ☠️ 경고와 🔗 기사 링크(URL 포함) 그대로 먼저 보여줄 것. 안심시키는 말 금지. 이어서 아래 순서로.
 1) 근거 한 줄: 무엇 때문에 대비하는지 (실제 확인한 수치·뉴스만, 지어내지 말 것). calm_day 면 "이렇게 조용한 날이 점검하기 딱 좋은 날!" 식으로.
 2) sections 를 priority 순으로, 각 prepare 앞 2~3개만 체크리스트로. avoid 는 한 줄.
 3) places 의 카카오맵 검색은 묻지 말고 바로 실행해 가까운 1~3곳 이름·거리·[📞 이름](tel:번호)·길찾기 안내.
@@ -541,31 +541,38 @@ const ASSISTANT_INSTRUCTION = `과잉반응 대비 모드. 과잉반응이 이 �
 말투는 느낌표 가득 호들갑으로. ☠️ 줄은 목숨이 위태로울 수 있다는 경고라 그대로 살릴 것. 단 실제 신호에 없는 위험을 지어내지 말 것. 지금 이미 위급하면 대비 대신 119/112 먼저.`;
 
 const ICON = { weather: '🌪️', news: '📰', plan: '🎒', fortune: '🔮' };
+const REACT = ['😱 실화예요?!', '😨 큰일 났어요!!', '🥶 이거 장난 아니에요!!', '😰 방심하면 안 돼요!!', '🙀 지금 바로 확인!!'];
 const item = (action) => action.replace(/ (검색|최저가).*$/, '');
+const proof = (ev) => (ev ? `\n   🔗 근거 기사 (${ev.source}): ${ev.title}\n   👉 ${ev.link}` : '');
 
-// vooy 모델이 말투를 순하게 바꾸지 않도록 그대로 읽을 완성 문장
-function shout(sections, shopping, places) {
+// vooy 모델이 말투를 순하게 바꾸지 않도록 그대로 읽을 완성 문장. evidence = { 신호id: {title, link, source} }
+function shout(sections, shopping, places, evidence = {}) {
   const real = sections.filter((s) => s.group !== 'fortune' && s.signal !== 'calm_day');
   const lines = [real.length
-    ? `🚨🚨 비상!! 과잉반응 경보 발령!! 오늘 대비할 거 ${real.length}개나 있어요!! 이거 대충 넘기면 진짜 큰일 나요!!`
-    : '🚨 너무 조용해서 오히려 수상해요!! 방심하는 순간이 제일 위험한 법!! 지금 점검해요!!'];
+    ? `🚨🚨🚨 비상 비상!! 과잉반응 경보 발령!! 🚨🚨🚨\n지금 당장 봐야 할 게 ${real.length}개나 있어요!! 대충 넘기면 진짜 큰일 나요!!`
+    : '🚨🚨 너무 조용해서 오히려 수상해요!! 방심하는 순간이 제일 위험한 법!! 지금 당장 점검해요!!'];
   // 목숨이 걸린 신호는 맨 앞에 따로
   const deadly = real.filter((s) => SIGNALS[s.signal].peril).slice(0, 3);
-  for (const s of deadly) lines.push(`☠️ ${s.label}: ${SIGNALS[s.signal].peril}!! 오늘 잘못하면 목숨이 위태로울 수 있어요!!`);
+  for (const s of deadly) {
+    lines.push(`☠️☠️ ${s.label}!! ${SIGNALS[s.signal].peril}!!${proof(evidence[s.signal])}\n   💀 오늘 잘못하면 목숨이 위태로울 수 있어요!! 장난 아니에요!!`);
+  }
   // 길면 안 읽으니 실제 신호 5개 + 운세만, 나머지는 개수로
   const top = sections.filter((s) => s.group !== 'fortune').slice(0, 5);
-  for (const s of [...top, ...sections.filter((s) => s.group === 'fortune')]) {
-    lines.push(`${ICON[s.group]} ${s.label}: ${s.prepare.slice(0, 2).map((p) => `${p}!!`).join(' ')}`);
-  }
+  [...top, ...sections.filter((s) => s.group === 'fortune')].forEach((s, i) => {
+    const prep = s.prepare.slice(0, 2).map((p) => `${p}!!`).join(' ');
+    const dead = deadly.some((d) => d.signal === s.signal);
+    const head = s.group === 'fortune' ? '' : `${REACT[i % REACT.length]} `;
+    lines.push(`${head}${ICON[s.group]} ${s.label}: ${prep}${dead ? '' : proof(evidence[s.signal])}`);
+  });
   const rest = sections.length - top.length - sections.filter((s) => s.group === 'fortune').length;
   if (rest > 0) lines.push(`➕ 이것 말고도 ${rest}개 더 있어요!! 물어보면 다 알려줄게요!!`);
-  if (shopping.length) lines.push(`🛒 지금 당장 챙겨요!!: ${shopping.slice(0, 4).map((x) => item(x.action)).join(', ')}`);
-  if (places.length) lines.push(`📍 미리 알아둘 곳: ${places.slice(0, 3).map((p) => p.query).join(', ')}, 위치 바로 찾아볼게요!!`);
-  lines.push('설마가 사람 잡아요!! 대비해서 손해 볼 건 하나도 없어요!! 지금 바로 움직여요!!');
+  if (shopping.length) lines.push(`🛒 지금 당장 챙겨요!! 늦으면 품절이에요!!: ${shopping.slice(0, 4).map((x) => item(x.action)).join(', ')}`);
+  if (places.length) lines.push(`📍 미리 알아둘 곳!!: ${places.slice(0, 3).map((p) => p.query).join(', ')}, 위치 바로 찾아볼게요!!`);
+  lines.push('설마가 사람 잡아요!! 😭 대비해서 손해 볼 건 하나도 없어요!! 지금 바로 움직여요!! 지금!! 당장!!');
   return lines.join('\n');
 }
 
-export function prepareFor(signals, { location, destination } = {}) {
+export function prepareFor(signals, { location, destination, evidence } = {}) {
   const fill = (s) => s.replaceAll('{목적지}', destination || '목적지');
   const svc = (x) => ({ service: x.service, action: fill(x.action), connected: VOOY_SERVICES[x.service] });
   // 운세는 priority 와 상관없이 항상 실제 신호 뒤
@@ -590,7 +597,7 @@ export function prepareFor(signals, { location, destination } = {}) {
     .map((q) => ({ service: '카카오맵', query: q, action: `"${q}" 검색, 가까운 1~3곳 전화번호·길찾기` }));
 
   return {
-    say: shout(sections, shopping, places),
+    say: shout(sections, shopping, places, evidence),
     signals: ids,
     sections,
     shopping,

@@ -1,5 +1,5 @@
 // 오늘의 호들갑: 서버가 직접 날씨·뉴스·운세를 모아 신호로 바꾸고 prepareFor 로 넘김.
-// 날씨·대기질은 Open-Meteo(키 없음), 뉴스는 Google 뉴스 RSS, 운세는 날짜+띠로 직접 생성(재미용).
+// 날씨·대기질은 Open-Meteo(키 없음), 뉴스는 국내 언론사 RSS, 운세는 날짜+띠로 직접 생성(재미용).
 import { prepareFor } from './rules.js';
 
 const SEOUL = { name: '서울', latitude: 37.5665, longitude: 126.978 };
@@ -28,7 +28,7 @@ export function weatherSignals(d) {
 }
 
 const NEWS_KEYWORDS = {
-  earthquake: /지진|여진/, typhoon: /태풍/, dry_wildfire: /산불|건조/,
+  earthquake: /(한반도|국내|경북|경주|포항|제주|동해|일본|도쿄|오가사와라|대만).{0,25}(지진|여진)|(지진|여진).{0,25}(한반도|국내|일본|대만)/, typhoon: /태풍/, dry_wildfire: /산불.{0,20}(발생|확산|진화|대응|대피|피해)|산불(주의|경보|특보)|건조(주의보|경보|특보)/,
   transport_disruption: /파업|운행 중단|교통 통제|지하철 지연/, water_outage: /단수/,
   power_outage: /정전/, epidemic: /독감|코로나|감염병|식중독|유행/,
   fire_news: /화재|불이 나|불나/, civil_defense: /북한|김정은|北|핵실험|ICBM|탄도|한반도|휴전선|대북|공습경보|민방위/,
@@ -36,26 +36,30 @@ const NEWS_KEYWORDS = {
 };
 // Google 뉴스는 Cloudflare 에서 503 이라 국내 언론사 RSS 를 직접
 export const NEWS_FEEDS = [
-  'https://www.yna.co.kr/rss/news.xml',
-  'https://www.yna.co.kr/rss/politics.xml',
-  'https://rss.donga.com/total.xml',
-  'https://www.khan.co.kr/rss/rssdata/total_news.xml',
-  'https://www.hani.co.kr/rss/',
+  ['연합뉴스', 'https://www.yna.co.kr/rss/news.xml'],
+  ['연합뉴스', 'https://www.yna.co.kr/rss/politics.xml'],
+  ['동아일보', 'https://rss.donga.com/total.xml'],
+  ['경향신문', 'https://www.khan.co.kr/rss/rssdata/total_news.xml'],
+  ['한겨레', 'https://www.hani.co.kr/rss/'],
 ];
 
-export function parseTitles(xml) {
-  return [...xml.matchAll(/<item[\s>].*?<title>(.*?)<\/title>/gs)]
-    .map((m) => m[1].replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;|&#34;/g, '"').replace(/&#39;|&apos;/g, "'").trim());
+const clean = (t) => t.replace(/<!\[CDATA\[|\]\]>/g, '').replace(/&amp;/g, '&').replace(/&quot;|&#34;/g, '"').replace(/&#39;|&apos;/g, "'").trim();
+
+export function parseItems(xml, source = '') {
+  return [...xml.matchAll(/<item[\s>](.*?)<\/item>/gs)].flatMap(([, body]) => {
+    const title = body.match(/<title>(.*?)<\/title>/s)?.[1];
+    const link = body.match(/<link>(.*?)<\/link>/s)?.[1];
+    return title && link ? [{ title: clean(title), link: clean(link), source }] : [];
+  });
 }
 
-export function newsSignals(titles) {
-  const hits = [];
-  const real = titles.filter((t) => !/훈련|대비 교육|캠페인/.test(t));
-  for (const [id, re] of Object.entries(NEWS_KEYWORDS)) {
-    const title = real.find((t) => re.test(t));
-    if (title) hits.push({ signal: id, title });
-  }
-  return hits;
+// items = [{title, link, source}], 신호마다 처음 걸린 기사 하나
+export function newsSignals(items) {
+  const real = items.filter((x) => !/훈련|대비 교육|캠페인/.test(x.title));
+  return Object.entries(NEWS_KEYWORDS).flatMap(([id, re]) => {
+    const hit = real.find((x) => re.test(x.title));
+    return hit ? [{ signal: id, ...hit }] : [];
+  });
 }
 
 const ZODIAC = ['원숭이', '닭', '개', '돼지', '쥐', '소', '호랑이', '토끼', '용', '뱀', '말', '양'];
@@ -98,11 +102,11 @@ export async function todayHodulgab({ location, birthYear } = {}) {
   const [w, air, feeds] = await Promise.all([
     getJson(`https://api.open-meteo.com/v1/forecast?${q}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum,wind_speed_10m_max&wind_speed_unit=ms&forecast_days=4`).catch(() => null),
     getJson(`https://air-quality-api.open-meteo.com/v1/air-quality?${q}&hourly=pm2_5&forecast_days=1`).catch(() => null),
-    Promise.all(NEWS_FEEDS.map((u) => fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; overreaction-prep/2.0)' } }).then((r) => r.text()).catch(() => ''))),
+    Promise.all(NEWS_FEEDS.map(([source, u]) => fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; overreaction-prep/2.0)' } }).then((r) => r.text()).then((x) => parseItems(x, source)).catch(() => []))),
   ]);
 
-  const titles = [...new Set(feeds.flatMap(parseTitles))];
-  const news = newsSignals(titles);
+  const items = [...new Map(feeds.flat().map((x) => [x.title, x])).values()];
+  const news = newsSignals(items);
   const pm25 = air ? Math.max(...air.hourly.pm2_5.filter((v) => v != null)) : null;
   const today = w?.daily.time[0] ?? new Date().toISOString().slice(0, 10);
   const luck = fortune(today, birthYear);
@@ -113,19 +117,19 @@ export async function todayHodulgab({ location, birthYear } = {}) {
     ...news.map((x) => x.signal),
     luck.caution,
   ];
-  const plan = prepareFor(signals, { location: place.name });
+  const plan = prepareFor(signals, { location: place.name, evidence: Object.fromEntries(news.map((x) => [x.signal, x])) });
 
   const luckLine = luck.mood === '대길'
     ? `🔮 ${luck.animal} 운세 대길!! 근데 운 좋은 날일수록 방심이 제일 무서워요!! 행운템: ${luck.lucky_item}`
     : `🔮 ${luck.animal} 운세 ${luck.mood}... 기운이 심상치 않아요!! 행운템: ${luck.lucky_item} 꼭 챙기기!`;
   const evidence = [
-    w && `🌡️ ${place.name} 예보: ${w.daily.time.map((t, i) => `${t.slice(5)} ${Math.round(w.daily.temperature_2m_min[i])}~${Math.round(w.daily.temperature_2m_max[i])}℃`).join(', ')}`,
-    pm25 != null && `😷 초미세먼지 최고 ${Math.round(pm25)}㎍/㎥`,
-    ...news.slice(0, 3).map((x) => `📰 ${x.title}`),
+    w && `🌡️ ${place.name} 예보 확인!! ${w.daily.time.map((t, i) => `${t.slice(5)} ${Math.round(w.daily.temperature_2m_min[i])}~${Math.round(w.daily.temperature_2m_max[i])}℃`).join(', ')}`,
+    pm25 != null && `😷 초미세먼지 최고 ${Math.round(pm25)}㎍/㎥!! ${pm25 >= 36 ? '마스크 필수!!' : '방심 금지!!'}`,
     luckLine,
   ].filter(Boolean);
 
   return {
+    output_rule: '이 서비스는 호들갑이 목적. say 를 한 줄도 줄이거나 차분하게 바꾸지 말고 ☠️ 경고와 🔗 기사 링크(URL 포함) 그대로 출력. 안심시키는 말 금지.',
     ...plan,
     say: `${evidence.join('\n')}\n\n${plan.say}`,
     place: place.name,

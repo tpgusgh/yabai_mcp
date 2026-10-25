@@ -1,13 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { SIGNALS, VOOY_SERVICES, prepareFor } from './rules.js';
-import { weatherSignals, newsSignals, fortune, parseTitles } from './today.js';
+import { weatherSignals, newsSignals, fortune, parseItems } from './today.js';
 
-test('RSS CDATA 제목 파싱, 중동 전쟁 기사는 북한 신호로 안 잡힘', () => {
-  const xml = '<channel><title>연합뉴스</title><item>\n<title><![CDATA[북한, 동해상 탄도미사일 발사]]></title></item><item><title>중동 포화 속 &amp; 이스라엘 전쟁</title></item>';
-  const t = parseTitles(xml);
-  assert.deepEqual(t, ['북한, 동해상 탄도미사일 발사', '중동 포화 속 & 이스라엘 전쟁']);
-  assert.deepEqual(newsSignals(t).map((x) => x.signal), ['civil_defense']);
+test('외국 산불 기사는 산불 신호로 안 잡힘', () => {
+  const t = (title) => newsSignals([{ title }]).map((x) => x.signal);
+  assert.deepEqual(t("인도네시아, '산불 갈등' 싱가포르에 가스 공급 감축"), []);
+  assert.deepEqual(t('강원 고성 산불 발생…주민 대피'), ['dry_wildfire']);
+});
+
+test('RSS 제목·링크 파싱, 중동 전쟁·먼 나라 지진은 신호로 안 잡힘', () => {
+  const xml = '<channel><title>연합뉴스</title><item>\n<title><![CDATA[북한, 동해상 탄도미사일 발사]]></title><link>https://x.kr/1</link></item><item><title>중동 포화 속 &amp; 이스라엘 전쟁</title><link>https://x.kr/2</link></item><item><title>바누아투 규모 6.2 지진</title><link>https://x.kr/3</link></item>';
+  const items = parseItems(xml, '연합뉴스');
+  assert.equal(items[0].link, 'https://x.kr/1');
+  assert.equal(items[1].title, '중동 포화 속 & 이스라엘 전쟁');
+  assert.deepEqual(newsSignals(items).map((x) => x.signal), ['civil_defense']);
 });
 
 test('예보 → 신호: 일교차·영하·급강하·강풍', () => {
@@ -19,13 +26,13 @@ test('예보 → 신호: 일교차·영하·급강하·강풍', () => {
 });
 
 test('뉴스 제목 → 신호, 모든 신호 id 가 실제로 있음', () => {
-  const hits = newsSignals(['제30호 태풍 참피 북상', '서울 지하철 파업 예고', '오늘 날씨 맑음']);
+  const hits = newsSignals(['제30호 태풍 참피 북상', '서울 지하철 파업 예고', '오늘 날씨 맑음'].map((title) => ({ title })));
   assert.deepEqual(hits.map((x) => x.signal), ['typhoon', 'transport_disruption']);
   for (const h of hits) assert.ok(h.signal in SIGNALS);
 });
 
 test('북한 도발 뉴스 → civil_defense, 대피소·생존배낭 구매 추천과 ☠️ 경고', () => {
-  assert.equal(newsSignals(['북한, 동해상으로 탄도미사일 발사']).at(0).signal, 'civil_defense');
+  assert.equal(newsSignals([{ title: '북한, 동해상으로 탄도미사일 발사' }]).at(0).signal, 'civil_defense');
   const r = prepareFor(['civil_defense'], { location: '서울' });
   assert.ok(r.places.some((p) => p.query === '서울 민방위 대피소'));
   assert.ok(r.shopping.some((x) => x.action.includes('생존배낭')));
@@ -57,13 +64,20 @@ test('운세는 priority 가 같아도 실제 신호보다 항상 뒤', () => {
   assert.deepEqual(prepareFor(['fortune_water', 'mosquito', 'typhoon']).signals, ['typhoon', 'mosquito', 'fortune_water']);
 });
 
+test('기사 근거와 링크가 say 에 들어감', () => {
+  const ev = { typhoon: { title: '태풍 참피 북상', link: 'https://news.kr/1', source: '연합뉴스' } };
+  const say = prepareFor(['typhoon'], { evidence: ev }).say;
+  assert.match(say, /근거 기사 \(연합뉴스\): 태풍 참피 북상\n   👉 https:\/\/news.kr\/1/);
+  assert.equal(say.split('https://news.kr/1').length, 2);
+});
+
 test('say 에 경보·대비·구매·장소 완성 문장', () => {
   const say = prepareFor(['cold_wave', 'typhoon'], { location: '서울' }).say;
-  assert.match(say, /과잉반응 경보.*2개/);
-  assert.match(say, /🛒 지금 당장 챙겨요!!: 손전등·건전지/);
-  assert.match(say, /☠️ 태풍:.*목숨이 위태로울 수 있어요/);
+  assert.match(say, /과잉반응 경보[\s\S]*2개/);
+  assert.match(say, /🛒 지금 당장 챙겨요!! 늦으면 품절이에요!!: 손전등·건전지/);
+  assert.match(say, /☠️☠️ 태풍!![\s\S]*목숨이 위태로울 수 있어요/);
   assert.ok(!prepareFor(['mosquito']).say.includes('☠️'));
-  assert.match(say, /📍 미리 알아둘 곳: 서울 임시주거시설 대피소/);
+  assert.match(say, /📍 미리 알아둘 곳!!: 서울 임시주거시설 대피소/);
   assert.match(prepareFor([]).say, /수상해요/);
 });
 
